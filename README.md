@@ -1,12 +1,20 @@
-# Xray (VLESS + WebSocket) для Apply.build
+# Xray (VLESS + WebSocket) для Apply.build + сайт с морским котиком 🦭
 
 Docker-образ с Xray, готовый к деплою на Apply.build (и любой другой PaaS, который
 проксирует HTTPS на контейнер и задаёт порт через переменную `$PORT`).
 
+Как устроено:
+
+- **nginx** слушает `$PORT` наружу:
+  - `/` — симпатичный сайт с морским котиком (меняет позу каждые 5 минут).
+    Заодно отвечает на health check платформы кодом 200;
+  - `/vless` — проксирует WebSocket внутрь на Xray;
+- **Xray** слушает только `127.0.0.1:8081` (переменная `XRAY_PORT`), наружу не торчит.
+
 Схема работы: клиент идёт по TLS на `https://<твой-домен>` (сертификат и
-терминацию TLS делает сам Apply.build), платформа проксирует уже обычный
-WebSocket внутрь контейнера на `$PORT`. Поэтому в конфиге Xray TLS выключен —
-включать его не нужно.
+терминацию TLS делает сам Apply.build), платформа проксирует уже обычный HTTP
+на nginx в контейнере, nginx отдаёт сайт либо проксирует WebSocket в Xray.
+Поэтому в конфиге Xray TLS выключен — включать его не нужно.
 
 ## Деплой на Apply.build
 
@@ -18,8 +26,11 @@ WebSocket внутрь контейнера на `$PORT`. Поэтому в ко
      Сгенерировать: `uuidgen` в терминале, или `cat /proc/sys/kernel/random/uuid`,
      или любым онлайн-генератором UUID v4.
    - `WS_PATH` — опционально, путь WebSocket. По умолчанию `/vless`.
+     Внимание: путь захардкожен и в `nginx.conf.tmpl` (`location = /vless`);
+     если меняешь `WS_PATH` — поменяй и location в шаблоне nginx.
    - `PORT` задаёт сама платформа, трогать не нужно.
-4. Задеплой. Дождись, пока сервис станет зелёным (не 502).
+   - `XRAY_PORT` — внутренний порт Xray (по умолчанию `8081`), менять не нужно.
+4. Задеплой. Дождись, пока сервис станет зелёным.
 
 ## VLESS-ссылка для клиента
 
@@ -30,9 +41,9 @@ vless://UUID@HOST:443?encryption=none&security=tls&sni=HOST&type=ws&host=HOST&pa
 ```
 
 - `UUID` — тот же, что вшит в образ (или заданный тобой в переменной окружения);
-- `HOST` — твой домен, например `test2wpr.apps.apply.build`;
+- `HOST` — твой домен, например `pichika.apps.apply.build`;
 - `path=%2Fvless` — это закодированный `/vless` (если менял `WS_PATH` — закодируй свой путь);
-- в клиенте (v2rayNG, Streisand, FoXray, Hiddify и т.п.) можно просто вставить эту
+- в клиенте (v2rayNG, v2raytun, Streisand, FoXray, Hiddify и т.п.) можно просто вставить эту
   строку как есть — разберётся сам.
 
 ## Проверка
@@ -41,14 +52,22 @@ vless://UUID@HOST:443?encryption=none&security=tls&sni=HOST&type=ws&host=HOST&pa
 curl -sS -o /dev/null -w "%{http_code}\n" https://HOST/
 ```
 
-Пока Xray не поднят — будет `502`. Когда контейнер живой, обычный GET на корень
-тоже вернёт ошибку Xray (это нормально — Xray ждёт WebSocket, а не браузер),
-но уже не `502 Bad Gateway` от платформы.
+Должен вернуть `200` и сайт с котиком. А WebSocket-путь проверяется самим
+клиентом при подключении.
 
 ## Локальный тест (необязательно)
 
 ```sh
-UUID=$(cat /proc/sys/kernel/random/uuid) && echo "UUID=$UUID"
 docker build -t xray-apply .
-docker run --rm -e UUID="$UUID" -e PORT=8080 -p 8080:8080 xray-apply
+docker run --rm -e PORT=8080 -p 8080:8080 xray-apply
+# сайт:  http://localhost:8080/
+# конфиг Xray внутри: VLESS+WS на 127.0.0.1:8081, путь /vless
 ```
+
+## Файлы
+
+- `Dockerfile` — сборка: Xray + nginx;
+- `entrypoint.sh` — подстановка переменных, запуск nginx и Xray;
+- `config.json.tmpl` — шаблон конфига Xray;
+- `nginx.conf.tmpl` — шаблон конфига nginx (сайт + прокси на Xray);
+- `index.html`, `seal1.png`, `seal2.png`, `seal3.png` — сайт с морским котиком.
